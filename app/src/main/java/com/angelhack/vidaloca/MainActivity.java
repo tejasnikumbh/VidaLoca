@@ -31,11 +31,18 @@ import android.support.v7.widget.LinearLayoutManager;
 import android.support.v7.widget.RecyclerView;
 import android.widget.Toast;
 
+import com.loopj.android.http.AsyncHttpClient;
+import com.loopj.android.http.AsyncHttpResponseHandler;
+import com.loopj.android.http.RequestParams;
+import com.loopj.android.http.SyncHttpClient;
+
+import org.apache.http.Header;
 import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
 
 import java.io.File;
+import java.io.FileNotFoundException;
 import java.net.URL;
 import java.util.Arrays;
 import java.util.Collection;
@@ -46,6 +53,7 @@ import java.util.ArrayList;
 import java.util.ListIterator;
 import java.util.concurrent.TimeUnit;
 
+import static java.lang.Character.INITIAL_QUOTE_PUNCTUATION;
 import static java.lang.Character.toLowerCase;
 
 
@@ -130,6 +138,11 @@ public class MainActivity extends ActionBarActivity {
     private List<VidaVideo> curVideos;
     private RecyclerView rv;
 
+    ArrayList<VidaVideo> untranscribed_videos;
+    String api = Init.api_key;
+    String url = Init.url;
+    String get = Init.fetch;
+    String tagsLo;
 
         //mVideos.add(new VidaVideo("Sample Title","Sample Description","Something",videoThumbs.get(0)));
         // Check them against Database
@@ -147,6 +160,7 @@ public class MainActivity extends ActionBarActivity {
 
            // Populate the views as described in Dummy process by fetching from Database
 
+    String content;
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -155,6 +169,11 @@ public class MainActivity extends ActionBarActivity {
         mToolBar = (Toolbar) findViewById(R.id.tool_bar); // Attaching the layout to the toolbar object
         setSupportActionBar(mToolBar);
         getSupportActionBar().setDisplayShowTitleEnabled(false);
+
+
+
+
+
 
         // Styling the title
         TextView mTitle = (TextView) findViewById(R.id.toolbar_title);
@@ -203,9 +222,7 @@ public class MainActivity extends ActionBarActivity {
                     }
                 })
         );
-
     }
-
 
     private void setSearchAdapter() {
         mSearchBar = (EditText) findViewById(R.id.search_text);
@@ -259,34 +276,444 @@ public class MainActivity extends ActionBarActivity {
         }
         return false;
     }
+
+    private String getJSONFromVideo(final String path) {
+
+        class MyAsync extends AsyncTask<Void,Void,Integer> {
+
+            @Override
+            protected Integer doInBackground(Void... params) {
+                return null;
+            }
+
+            @Override
+            protected void onPostExecute(final Integer i) {
+
+                SyncHttpClient syncHttpClient = new SyncHttpClient();
+
+                syncHttpClient.get(get, new AsyncHttpResponseHandler() {
+                    @Override
+                    public void onSuccess(int statusCode, Header[] headers, byte[] responseBody) {
+                        String returnJson = new String(responseBody);
+                        String[] y = returnJson.split("\'");
+                        content = y[9]; //text
+                    }
+
+                    @Override
+                    public void onFailure(int statusCode, Header[] headers, byte[] responseBody, Throwable error) {
+
+                    }
+                });
+                RequestParams entityParams = new RequestParams();
+                entityParams.put("apikey", api);
+                entityParams.put("text", content);
+                entityParams.put("entity_type", "people_eng");
+                syncHttpClient.post("https:/api.idolondemand.com/1/api/sync/extractentity/v1", entityParams, new AsyncHttpResponseHandler() {
+                    @Override
+                    public void onSuccess(int statusCode, Header[] headers, byte[] responseBody) {
+                        tagsLo = new String(responseBody);
+                        Log.i("inner", tagsLo);
+
+
+                        Log.i("SUH", "JSON " + tagsLo);
+
+                        //get tags from JSON
+                        ArrayList<String> tags = getTagsFromJSON(tagsLo);
+                        Log.i("GOT", "Final Tags" + tags.toString());
+
+                        //insert tags into DB
+                        insertTitleIntoDB(untranscribed_videos.get(i).getVideoID(), tags.get(0));
+                        Log.i("INSERTTAG",untranscribed_videos.get(i).getVideoID()+" * " +tags.toString());
+                        insertTagsIntoDB(untranscribed_videos.get(i).getVideoID(), tags);
+
+                    }
+
+                    @Override
+                    public void onFailure(int statusCode, Header[] headers, byte[] responseBody, Throwable error) {
+
+                    }
+                });
+            }
+
+            protected Void doInBackground(final Integer i) {
+
+                AsyncHttpClient httpClient = new AsyncHttpClient();
+                File myFile = new File(path);
+                RequestParams p = new RequestParams();
+                try {
+                    p.put("file", myFile);
+                } catch (FileNotFoundException e) {
+                    e.printStackTrace();
+                }
+                p.put("apikey", api);
+
+                SyncHttpClient syncHttpClient = new SyncHttpClient();
+
+                syncHttpClient.post(url, p, new AsyncHttpResponseHandler() {
+                    @Override
+                    public void onSuccess(int statusCode, Header[] headers, byte[] responseBody) {
+                        String jobID = new String(responseBody);
+
+                        String[] temp = jobID.split("\"");
+                        String myJobID = temp[3];
+                    }
+                    @Override
+                    public void onFailure(int statusCode, Header[] headers, byte[] responseBody, Throwable error) {
+                    }
+                });
+                return null;
+            }
+        }
+        //String json_data = "{'entities':[{'original_text':'President Barack','normalized_text':'Barack Obama','type':'people_eng','normalized_length':12,'original_length':12,'score':0.3669,'additional_information':{'person_profession':['author','lawyer','politician','professor'],'person_date_of_birth':'4/8/1961','wikidata_id':76,'wikipedia_eng':'http://en.wikipedia.org/wiki/Barack_Obama','image':'https://upload.wikimedia.org/wikipedia/commons/8/8d/President_Barack_Obama.jpg'},'components':[]},{'original_text':'Nelson Mandela','normalized_text':'Nelson Mandela','type':'people_eng','normalized_length':14,'original_length':14,'score':0.2763,'additional_information':{'person_profession':['politician'],'person_date_of_birth':'18/7/1918','person_date_of_death':'05/12/2013','wikidata_id':8023,'wikipedia_eng':'http://en.wikipedia.org/wiki/Nelson_Mandela','image':'https://upload.wikimedia.org/wikipedia/commons/1/14/Nelson_Mandela-2008_(edit).jpg'},'components':[]}]}";
+        return tagsLo;
+    }
     private void analyzeNewVideos() {
 
         Log.i("GOT"," Speaking from async thread");
 
         //get untranscribed videos in DB (ID, videoPath)
-        ArrayList<VidaVideo> untranscribed_videos = getUntranscribedVideos();
+        untranscribed_videos = getUntranscribedVideos();
 
         Log.i("GOT",untranscribed_videos.toString() + "");
+
+
+        String[] JSONDummy = new String[10];
+        JSONDummy[0]="{'entities':[{'original_text':'President Barack','additional_information':{'person_profession':['author','lawyer','politician','professor'],}},{'original_text':'Nelson Mandela','normalized_text':'Nelson Mandela','type':'people_eng','normalized_length':14,'original_length':14,'score':0.2763,'additional_information':{'person_profession':['politician'],'person_date_of_birth':'18/7/1918','person_date_of_death':'05/12/2013','wikidata_id':8023,'wikipedia_eng':'http://en.wikipedia.org/wiki/Nelson_Mandela','image':'https://upload.wikimedia.org/wikipedia/commons/1/14/Nelson_Mandela-2008_(edit).jpg'},'components':[]}]}";
+        JSONDummy[1]=" {\n" +
+                "  \"entities\": [\n" +
+                "    {\n" +
+                "      \"normalized_text\": \"LeBron James\",\n" +
+                "      \"original_text\": \"LeBron James\",\n" +
+                "      \"type\": \"people_eng\",\n" +
+                "      \"normalized_length\": 12,\n" +
+                "      \"original_length\": 12,\n" +
+                "      \"score\": 0.3307,\n" +
+                "      \"components\": []\n" +
+                "    },\n" +
+                "    {\n" +
+                "      \"normalized_text\": \"Kobe Bryant\",\n" +
+                "      \"original_text\": \"Kobe Bryant\",\n" +
+                "      \"type\": \"people_eng\",\n" +
+                "      \"normalized_length\": 11,\n" +
+                "      \"original_length\": 11,\n" +
+                "      \"score\": 0.2788,\n" +
+                "      \"components\": []\n" +
+                "    }\n" +
+                "  ]\n" +
+                "} ";
+
+        JSONDummy[2]= "{\n" +
+                "  \"entities\": [\n" +
+                "    {\n" +
+                "      \"normalized_text\": \"http://www.idolondemand.com\",\n" +
+                "      \"original_text\": \"http://www.idolondemand.com\",\n" +
+                "      \"type\": \"internet/https\",\n" +
+                "      \"normalized_length\": 27,\n" +
+                "      \"original_length\": 27,\n" +
+                "      \"score\": 1,\n" +
+                "      \"components\": []\n" +
+                "    }\n" +
+                "  ]\n" +
+                "}";
+        JSONDummy[3] = "{\n" +
+                "  \"entities\": [\n" +
+                "    {\n" +
+                "      \"original_text\": \"BBC News\",\n" +
+                "      \"normalized_text\": \"BBC News\",\n" +
+                "      \"type\": \"companies_eng\",\n" +
+                "      \"normalized_length\": 8,\n" +
+                "      \"original_length\": 8,\n" +
+                "      \"score\": 0.4133,\n" +
+                "      \"additional_information\": {\n" +
+                "        \"wikidata_id\": 1160945,\n" +
+                "        \"wikipedia_eng\": \"http://en.wikipedia.org/wiki/BBC_News\"\n" +
+                "      },\n" +
+                "      \"components\": []\n" +
+                "    },\n" +
+                "    {\n" +
+                "      \"original_text\": \"BBC News\",\n" +
+                "      \"normalized_text\": \"BBC News\",\n" +
+                "      \"type\": \"companies_eng\",\n" +
+                "      \"normalized_length\": 8,\n" +
+                "      \"original_length\": 8,\n" +
+                "      \"score\": 0.4133,\n" +
+                "      \"additional_information\": {\n" +
+                "        \"wikidata_id\": 1160945,\n" +
+                "        \"wikipedia_eng\": \"http://en.wikipedia.org/wiki/BBC_News\"\n" +
+                "      },\n" +
+                "      \"components\": []\n" +
+                "    },\n" +
+                "    {\n" +
+                "      \"original_text\": \"BBC News\",\n" +
+                "      \"normalized_text\": \"BBC News\",\n" +
+                "      \"type\": \"companies_eng\",\n" +
+                "      \"normalized_length\": 8,\n" +
+                "      \"original_length\": 8,\n" +
+                "      \"score\": 0.4133,\n" +
+                "      \"additional_information\": {\n" +
+                "        \"wikidata_id\": 1160945,\n" +
+                "        \"wikipedia_eng\": \"http://en.wikipedia.org/wiki/BBC_News\"\n" +
+                "      },\n" +
+                "      \"components\": []\n" +
+                "    },\n" +
+                "    {\n" +
+                "      \"original_text\": \"McDonald's\",\n" +
+                "      \"normalized_text\": \"McDonald's Corp\",\n" +
+                "      \"type\": \"companies_eng\",\n" +
+                "      \"normalized_length\": 15,\n" +
+                "      \"original_length\": 15,\n" +
+                "      \"score\": 0.19519999999999998,\n" +
+                "      \"additional_information\": {\n" +
+                "        \"wikidata_id\": 38076,\n" +
+                "        \"wikipedia_eng\": \"http://en.wikipedia.org/wiki/McDonald's\"\n" +
+                "      },\n" +
+                "      \"components\": []\n" +
+                "    }\n" +
+                "  ]\n" +
+                "}";
+        JSONDummy[3] = "{\n" +
+                "  \"entities\": [\n" +
+                "    {\n" +
+                "      \"original_text\": \"BBC News\",\n" +
+                "      \"normalized_text\": \"BBC News\",\n" +
+                "      \"type\": \"companies_eng\",\n" +
+                "      \"normalized_length\": 8,\n" +
+                "      \"original_length\": 8,\n" +
+                "      \"score\": 0.4133,\n" +
+                "      \"additional_information\": {\n" +
+                "        \"wikidata_id\": 1160945,\n" +
+                "        \"wikipedia_eng\": \"http://en.wikipedia.org/wiki/BBC_News\"\n" +
+                "      },\n" +
+                "      \"components\": []\n" +
+                "    },\n" +
+                "    {\n" +
+                "      \"original_text\": \"Subsea 7\",\n" +
+                "      \"normalized_text\": \"Subsea 7 SA\",\n" +
+                "      \"type\": \"companies_eng\",\n" +
+                "      \"normalized_length\": 11,\n" +
+                "      \"original_length\": 11,\n" +
+                "      \"score\": 0.2766,\n" +
+                "      \"additional_information\": {\n" +
+                "        \"wikidata_id\": 1476377,\n" +
+                "        \"wikipedia_eng\": \"http://en.wikipedia.org/wiki/Subsea_7\"\n" +
+                "      },\n" +
+                "      \"components\": []\n" +
+                "    },\n" +
+                "    {\n" +
+                "      \"original_text\": \"Subsea 7\",\n" +
+                "      \"normalized_text\": \"Subsea 7 SA\",\n" +
+                "      \"type\": \"companies_eng\",\n" +
+                "      \"normalized_length\": 11,\n" +
+                "      \"original_length\": 11,\n" +
+                "      \"score\": 0.2766,\n" +
+                "      \"additional_information\": {\n" +
+                "        \"wikidata_id\": 1476377,\n" +
+                "        \"wikipedia_eng\": \"http://en.wikipedia.org/wiki/Subsea_7\"\n" +
+                "      },\n" +
+                "      \"components\": []\n" +
+                "    },\n" +
+                "    {\n" +
+                "      \"original_text\": \"Future • TV\",\n" +
+                "      \"normalized_text\": \"Future TV Co. Ltd.\",\n" +
+                "      \"type\": \"companies_eng\",\n" +
+                "      \"normalized_length\": 18,\n" +
+                "      \"original_length\": 18,\n" +
+                "      \"score\": 0.24789999999999998,\n" +
+                "      \"additional_information\": {\n" +
+                "        \"wikidata_id\": 17003300,\n" +
+                "        \"wikipedia_eng\": \"http://en.wikipedia.org/wiki/Future_TV_Co._Ltd.\"\n" +
+                "      },\n" +
+                "      \"components\": []\n" +
+                "    },\n" +
+                "    {\n" +
+                "      \"original_text\": \"Future • TV\",\n" +
+                "      \"normalized_text\": \"Future TV Co. Ltd.\",\n" +
+                "      \"type\": \"companies_eng\",\n" +
+                "      \"normalized_length\": 18,\n" +
+                "      \"original_length\": 18,\n" +
+                "      \"score\": 0.24789999999999998,\n" +
+                "      \"additional_information\": {\n" +
+                "        \"wikidata_id\": 17003300,\n" +
+                "        \"wikipedia_eng\": \"http://en.wikipedia.org/wiki/Future_TV_Co._Ltd.\"\n" +
+                "      },\n" +
+                "      \"components\": []\n" +
+                "    },\n" +
+                "    {\n" +
+                "      \"original_text\": \"Starbucks\",\n" +
+                "      \"normalized_text\": \"Starbucks Corp\",\n" +
+                "      \"type\": \"companies_eng\",\n" +
+                "      \"normalized_length\": 14,\n" +
+                "      \"original_length\": 14,\n" +
+                "      \"score\": 0.23149999999999998,\n" +
+                "      \"additional_information\": {\n" +
+                "        \"wikidata_id\": 37158,\n" +
+                "        \"wikipedia_eng\": \"http://en.wikipedia.org/wiki/Starbucks\"\n" +
+                "      },\n" +
+                "      \"components\": []\n" +
+                "    },\n" +
+                "    {\n" +
+                "      \"original_text\": \"Nissan\",\n" +
+                "      \"normalized_text\": \"Nissan Group\",\n" +
+                "      \"type\": \"companies_eng\",\n" +
+                "      \"normalized_length\": 12,\n" +
+                "      \"original_length\": 12,\n" +
+                "      \"score\": 0.22469999999999998,\n" +
+                "      \"additional_information\": {\n" +
+                "        \"wikidata_id\": 4115848,\n" +
+                "        \"wikipedia_eng\": \"http://en.wikipedia.org/wiki/Nissan_Group\"\n" +
+                "      },\n" +
+                "      \"components\": []\n" +
+                "    },\n" +
+                "  ]\n" +
+                "}";
+        JSONDummy[4] = "{\n" +
+                "  \"entities\": [\n" +
+                "    {\n" +
+                "      \"original_text\": \"Cats\",\n" +
+                "      \"normalized_text\": \"BBC News\",\n" +
+                "      \"type\": \"companies_eng\",\n" +
+                "      \"normalized_length\": 8,\n" +
+                "      \"original_length\": 8,\n" +
+                "      \"score\": 0.4133,\n" +
+                "      \"additional_information\": {\n" +
+                "        \"wikidata_id\": 1160945,\n" +
+                "        \"wikipedia_eng\": \"http://en.wikipedia.org/wiki/BBC_News\"\n" +
+                "      },\n" +
+                "      \"components\": []\n" +
+                "    },\n" +
+                "    {\n" +
+                "      \"original_text\": \"Meow 7\",\n" +
+                "      \"normalized_text\": \"Subsea 7 SA\",\n" +
+                "      \"type\": \"companies_eng\",\n" +
+                "      \"normalized_length\": 11,\n" +
+                "      \"original_length\": 11,\n" +
+                "      \"score\": 0.2766,\n" +
+                "      \"additional_information\": {\n" +
+                "        \"wikidata_id\": 1476377,\n" +
+                "        \"wikipedia_eng\": \"http://en.wikipedia.org/wiki/Subsea_7\"\n" +
+                "      },\n" +
+                "      \"components\": []\n" +
+                "    },\n" +
+                "    {\n" +
+                "      \"original_text\": \"Cute 7\",\n" +
+                "      \"normalized_text\": \"Subsea 7 SA\",\n" +
+                "      \"type\": \"companies_eng\",\n" +
+                "      \"normalized_length\": 11,\n" +
+                "      \"original_length\": 11,\n" +
+                "      \"score\": 0.2766,\n" +
+                "      \"additional_information\": {\n" +
+                "        \"wikidata_id\": 1476377,\n" +
+                "        \"wikipedia_eng\": \"http://en.wikipedia.org/wiki/Subsea_7\"\n" +
+                "      },\n" +
+                "      \"components\": []\n" +
+                "    },\n" +
+                "    {\n" +
+                "      \"original_text\": \"Funny • TV\",\n" +
+                "      \"normalized_text\": \"Future TV Co. Ltd.\",\n" +
+                "      \"type\": \"companies_eng\",\n" +
+                "      \"normalized_length\": 18,\n" +
+                "      \"original_length\": 18,\n" +
+                "      \"score\": 0.24789999999999998,\n" +
+                "      \"additional_information\": {\n" +
+                "        \"wikidata_id\": 17003300,\n" +
+                "        \"wikipedia_eng\": \"http://en.wikipedia.org/wiki/Future_TV_Co._Ltd.\"\n" +
+                "      },\n" +
+                "      \"components\": []\n" +
+                "    },\n" +
+                "    {\n" +
+                "      \"original_text\": \"Milk\",\n" +
+                "      \"normalized_text\": \"Starbucks Corp\",\n" +
+                "      \"type\": \"companies_eng\",\n" +
+                "      \"normalized_length\": 14,\n" +
+                "      \"original_length\": 14,\n" +
+                "      \"score\": 0.23149999999999998,\n" +
+                "      \"additional_information\": {\n" +
+                "        \"wikidata_id\": 37158,\n" +
+                "        \"wikipedia_eng\": \"http://en.wikipedia.org/wiki/Starbucks\"\n" +
+                "      },\n" +
+                "      \"components\": []\n" +
+                "    },\n" +
+                "    {\n" +
+                "      \"original_text\": \"Sratch\",\n" +
+                "      \"normalized_text\": \"Nissan Group\",\n" +
+                "      \"type\": \"companies_eng\",\n" +
+                "      \"normalized_length\": 12,\n" +
+                "      \"original_length\": 12,\n" +
+                "      \"score\": 0.22469999999999998,\n" +
+                "      \"additional_information\": {\n" +
+                "        \"wikidata_id\": 4115848,\n" +
+                "        \"wikipedia_eng\": \"http://en.wikipedia.org/wiki/Nissan_Group\"\n" +
+                "      },\n" +
+                "      \"components\": []\n" +
+                "    },\n" +
+                "  ]\n" +
+                "}";
+
+        JSONDummy[5] = "{\n" +
+                "  \"entities\": [\n" +
+                "    {\n" +
+                "      \"original_text\": \"Nepal\",\n" +
+                "      \"normalized_text\": \"BBC News\",\n" +
+                "      \"type\": \"companies_eng\",\n" +
+                "      \"normalized_length\": 8,\n" +
+                "      \"original_length\": 8,\n" +
+                "      \"score\": 0.4133,\n" +
+                "      \"additional_information\": {\n" +
+                "        \"wikidata_id\": 1160945,\n" +
+                "        \"wikipedia_eng\": \"http://en.wikipedia.org/wiki/BBC_News\"\n" +
+                "      },\n" +
+                "      \"components\": []\n" +
+                "    },\n" +
+                "    {\n" +
+                "      \"original_text\": \"Earthquake 7\",\n" +
+                "      \"normalized_text\": \"Subsea 7 SA\",\n" +
+                "      \"type\": \"companies_eng\",\n" +
+                "      \"normalized_length\": 11,\n" +
+                "      \"original_length\": 11,\n" +
+                "      \"score\": 0.2766,\n" +
+                "      \"additional_information\": {\n" +
+                "        \"wikidata_id\": 1476377,\n" +
+                "        \"wikipedia_eng\": \"http://en.wikipedia.org/wiki/Subsea_7\"\n" +
+                "      },\n" +
+                "      \"components\": []\n" +
+                "    },\n" +
+                "    {\n" +
+                "      \"original_text\": \" rickter scale 7\",\n" +
+                "      \"normalized_text\": \"Subsea 7 SA\",\n" +
+                "      \"type\": \"companies_eng\",\n" +
+                "      \"normalized_length\": 11,\n" +
+                "      \"original_length\": 11,\n" +
+                "      \"score\": 0.2766,\n" +
+                "      \"additional_information\": {\n" +
+                "        \"wikidata_id\": 1476377,\n" +
+                "        \"wikipedia_eng\": \"http://en.wikipedia.org/wiki/Subsea_7\"\n" +
+                "      },\n" +
+                "      \"components\": []\n" +
+                "    },\n" +
+                "    {\n" +
+                "      \"original_text\": \"GoHomeIndianMedia • TV\",\n" +
+                "      \"normalized_text\": \"Future TV Co. Ltd.\",\n" +
+                "      \"type\": \"companies_eng\",\n" +
+                "      \"normalized_length\": 18,\n" +
+                "      \"original_length\": 18,\n" +
+                "      \"score\": 0.24789999999999998,\n" +
+                "      \"additional_information\": {\n" +
+                "        \"wikidata_id\": 17003300,\n" +
+                "        \"wikipedia_eng\": \"http://en.wikipedia.org/wiki/Future_TV_Co._Ltd.\"\n" +
+                "      },\n" +
+                "      \"components\": []\n" +
+                "    },\n" +
+                "  ]\n" +
+                "}";
+
         //for each new video
         for(int i=0; i<untranscribed_videos.size();i++)
         {
             //get JSON
-            String json_data = "{'entities':[{'original_text':'President Barack','normalized_text':'Barack Obama','type':'people_eng','normalized_length':12,'original_length':12,'score':0.3669,'additional_information':{'person_profession':['author','lawyer','politician','professor'],'person_date_of_birth':'4/8/1961','wikidata_id':76,'wikipedia_eng':'http://en.wikipedia.org/wiki/Barack_Obama','image':'https://upload.wikimedia.org/wikipedia/commons/8/8d/President_Barack_Obama.jpg'},'components':[]},{'original_text':'Nelson Mandela','normalized_text':'Nelson Mandela','type':'people_eng','normalized_length':14,'original_length':14,'score':0.2763,'additional_information':{'person_profession':['politician'],'person_date_of_birth':'18/7/1918','person_date_of_death':'05/12/2013','wikidata_id':8023,'wikipedia_eng':'http://en.wikipedia.org/wiki/Nelson_Mandela','image':'https://upload.wikimedia.org/wikipedia/commons/1/14/Nelson_Mandela-2008_(edit).jpg'},'components':[]}]}";
-            // = getJSONFromVideo(untranscribed_videos.get(i).getVideoPath());
-
-            //get tags from JSON
-            ArrayList<String> tags = getTagsFromJSON(json_data);
-            Log.i("GOT", "Final Tags" + tags.toString());
-
-            //insert tags into DB
-            insertTitleIntoDB(untranscribed_videos.get(i).getVideoID(), tags.get(0));
-            Log.i("INSERTTAG",untranscribed_videos.get(i).getVideoID()+" * " +tags.toString());
-            insertTagsIntoDB(untranscribed_videos.get(i).getVideoID(), tags);
-
+            String json_data = JSONDummy[i];
+            //String json_data = getJSONFromVideo(untranscribed_videos.get(i).getVideoPath());
         }
-
         Log.i("GOT","Finished analyzing");
-
     }
 
     private void insertTitleIntoDB(int videoID, String title) {
@@ -305,19 +732,6 @@ public class MainActivity extends ActionBarActivity {
 
             for (int a = 0; a < jsonArray.length(); a++) {
 
-               /* Entity e = new Entity();
-
-                e.original_text = jsonArray.getJSONObject(a).getString("original_text");
-                e.normalized_text = jsonArray.getJSONObject(a).getString("normalized_text");
-                e.type = jsonArray.getJSONObject(a).getString("type");
-                e.normalized_length = jsonArray.getJSONObject(a).getInt("normalized_length");
-                e.original_length = jsonArray.getJSONObject(a).getInt("original_length");
-                e.score = jsonArray.getJSONObject(a).getDouble("score");
-                */
-
-                // JSON data with in JSONObject "additional_information"
-                //e.additional_information = jsonArray.getJSONObject(a).getJSONObject("additional_information").getString("image");
-                //e.additional_information = jsonArray.getJSONObject(a).getJSONObject("additional_information").getInt("wikidata_id");
 
                 JSONObject jObj = jsonArray.getJSONObject(a);
                 String tag = jObj.getString("original_text");
@@ -333,7 +747,7 @@ public class MainActivity extends ActionBarActivity {
 
 
         ArrayList<String> tags = new ArrayList();
-
+        Log.i("suh",json_data);
         //get entities
         try {
             tags = getEntityObjectFromJSON(new JSONObject(json_data));
@@ -344,36 +758,6 @@ public class MainActivity extends ActionBarActivity {
         return tags;
     }
 
-    //ArrayList<String> documents= new ArrayList();
-    //documents = getDocumentObjects(data);
-
-    private static ArrayList getDocumentObjects(String data) {
-
-        ArrayList<Document> documents = new ArrayList<>();
-
-        try {
-            JSONObject result = new JSONObject(data);
-
-            JSONArray jsonArray = result.getJSONArray("document");
-
-            for(int a=0;a<jsonArray.length();a++)
-            {
-                Document d = new Document();
-
-                d.offset = jsonArray.getJSONObject(a).getInt("offset");
-                d.content = jsonArray.getJSONObject(a).getString("content");
-
-                documents.add(d);
-
-            }
-
-        }
-        catch (JSONException e){
-            e.printStackTrace();
-        }
-
-        return documents;
-    }
 
     private ArrayList<VidaVideo> getUntranscribedVideos() {
 
